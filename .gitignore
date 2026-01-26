@@ -1,0 +1,7 @@
+backendEnv/
+__pycache__/
+plots/
+old_code/
+other_models/
+sandbox.ipynb
+nek_error.txt
