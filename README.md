@@ -8,3 +8,7 @@ After setting up the environment from the <i>'requirements.txt'</i> file run the
 This starts the FastAPI endpoint on port 8000. To be able to use the API from another network you set up CloudFare tunnel in another terminal by running:
 <pre lang="markdown">cloudflared tunnel --url http://127.0.0.1:8000</pre>
 Then copy the CloudFare link and paste it to the webpage.
+
+### Note:
+The code in this repository is an assembly of scripts that were used to research and write my diploma thesis.<br>
+All provided code is intellectual property of it's author and should not be directly used elsewhere.
