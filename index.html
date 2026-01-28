@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pencil Coordinate Logger</title>
+<style>
+  body {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: #eee;
+    font-family: sans-serif;
+  }
+  #controls {
+    margin: 10px;
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+  }
+  #status {
+    font-size: 0.95rem;
+    opacity: 0.85;
+    min-width: 160px;
+  }
+  #stage {
+    position: relative;
+    width: 800px;
+    height: 600px;
+  }
+  canvas, #resultImage {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 800px;
+    height: 600px;
+    border: 1px solid #444;
+    touch-action: none; /* important for iPad Pencil */
+    background: white;
+  }
+  #resultImage {
+    display: none;
+    object-fit: contain;
+  }
+  #backendUrl {
+    width: min(520px, 90vw);
+    padding: 6px 8px;
+  }
+</style>
+</head>
+<body>
+
+  <div id="controls">
+    <input type="file" id="templateInput" accept="image/*">
+    <button id="clearBtn">Clear</button>
+    <button id="exportBtn">Export CSV</button>
+
+    <!-- NEW -->
+    <button id="analyseBtn">Analyse</button>
+    <button id="returnBtn" style="display:none;">Return</button>
+
+    <span id="status"></span>
+
+    <!-- NEW: paste Cloudflare URL here (stored in browser) -->
+    <input id="backendUrl" placeholder="Backend base URL (e.g. https://xxxx.trycloudflare.com)" />
+  </div>
+
+  <div id="stage">
+    <canvas id="canvas" width="800" height="600"></canvas>
+    <img id="resultImage" alt="Analysis result">
+  </div>
+
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+const templateInput = document.getElementById('templateInput');
+const clearBtn = document.getElementById('clearBtn');
+const exportBtn = document.getElementById('exportBtn');
+
+const analyseBtn = document.getElementById('analyseBtn');
+const returnBtn = document.getElementById('returnBtn');
+const resultImage = document.getElementById('resultImage');
+const statusEl = document.getElementById('status');
+const backendUrlInput = document.getElementById('backendUrl');
+
+let drawing = false;
+let points = [];
+let bgImage = null;
+let bgImageDrawInfo = null;
+
+// Stored backend URL so you don't need to edit GitHub each time the tunnel URL changes
+const LS_BACKEND = "spiral_backend_base_url";
+backendUrlInput.value = localStorage.getItem(LS_BACKEND) || "";
+
+backendUrlInput.addEventListener("change", () => {
+  const v = backendUrlInput.value.trim().replace(/\/+$/, "");
+  backendUrlInput.value = v;
+  localStorage.setItem(LS_BACKEND, v);
+  setStatus(v ? "Backend URL saved." : "Backend URL cleared.");
+});
+
+function setStatus(msg) { statusEl.textContent = msg || ""; }
+function setBusy(b) {
+  analyseBtn.disabled = b;
+  clearBtn.disabled = b;
+  exportBtn.disabled = b;
+  templateInput.disabled = b;
+  backendUrlInput.disabled = b;
+}
+
+function getAnalyzeEndpoint() {
+  const base = (backendUrlInput.value || "").trim().replace(/\/+$/, "");
+  if (!base) return null;
+  return base + "/analyze";
+}
+
+function showResultFromBlob(blob) {
+  const url = URL.createObjectURL(blob);
+  resultImage.src = url;
+  resultImage.style.display = "block";
+  canvas.style.display = "none";
+  returnBtn.style.display = "inline-block";
+  analyseBtn.style.display = "none";
+}
+
+function resetForRedraw() {
+  resultImage.style.display = "none";
+  resultImage.src = "";
+  canvas.style.display = "block";
+  returnBtn.style.display = "none";
+  analyseBtn.style.display = "inline-block";
+
+  points = [];
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (bgImage && bgImageDrawInfo) {
+    ctx.drawImage(
+      bgImage,
+      bgImageDrawInfo.offsetX,
+      bgImageDrawInfo.offsetY,
+      bgImageDrawInfo.drawWidth,
+      bgImageDrawInfo.drawHeight
+    );
+  }
+}
+
+// ---- Upload template image (same behavior as your current file) ----
+templateInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const img = new Image();
+  img.onload = () => {
+    bgImage = img;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    const canvasRatio = canvas.width / canvas.height;
+    const imgRatio = img.width / img.height;
+    let drawWidth, drawHeight, offsetX, offsetY;
+
+    if (imgRatio > canvasRatio) {
+      drawWidth = canvas.width;
+      drawHeight = canvas.width / imgRatio;
+      offsetX = 0;
+      offsetY = (canvas.height - drawHeight) / 2;
+    } else {
+      drawHeight = canvas.height;
+      drawWidth = canvas.height * imgRatio;
+      offsetX = (canvas.width - drawWidth) / 2;
+      offsetY = 0;
+    }
+
+    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+    bgImageDrawInfo = { offsetX, offsetY, drawWidth, drawHeight };
+  };
+  img.src = URL.createObjectURL(file);
+});
+
+// ---- Clear (keeps your current behavior; also acts like Return if showing result) ----
+clearBtn.addEventListener('click', () => {
+  if (resultImage.style.display === "block") {
+    setStatus("");
+    resetForRedraw();
+    return;
+  }
+
+  points = [];
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (bgImage && bgImageDrawInfo) {
+    ctx.drawImage(
+      bgImage,
+      bgImageDrawInfo.offsetX,
+      bgImageDrawInfo.offsetY,
+      bgImageDrawInfo.drawWidth,
+      bgImageDrawInfo.drawHeight
+    );
+  }
+});
+
+// ---- Drawing handlers (same; pen only) ----
+canvas.addEventListener('pointerdown', (e) => {
+  if (resultImage.style.display === "block") return;
+  if (e.pointerType === 'pen') {
+    drawing = true;
+    addPoint(e);
+  }
+});
+
+canvas.addEventListener('pointermove', (e) => {
+  if (resultImage.style.display === "block") return;
+  if (drawing && e.pointerType === 'pen') {
+    addPoint(e);
+    drawLine();
+  }
+});
+
+canvas.addEventListener('pointerup', () => drawing = false);
+canvas.addEventListener('pointercancel', () => drawing = false);
+
+function addPoint(e) {
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  const t = performance.now();
+  points.push({ t, x, y });
+}
+
+function drawLine() {
+  if (points.length < 2) return;
+  const p1 = points[points.length - 2];
+  const p2 = points[points.length - 1];
+  ctx.beginPath();
+  ctx.moveTo(p1.x, p1.y);
+  ctx.lineTo(p2.x, p2.y);
+  ctx.strokeStyle = 'black';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
+
+// ---- Export CSV (same behavior) ----
+exportBtn.addEventListener('click', () => {
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:.]/g,'-');
+  const filename = `drawing_${timestamp}.csv`;
+
+  let csvContent = "timestamp_ms,x,y\n";
+  for (const point of points) {
+    csvContent += `${point.t},${point.x},${point.y}\n`;
+  }
+
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement("a");
+  link.setAttribute("href", URL.createObjectURL(blob));
+  link.setAttribute("download", filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+});
+
+// ---- Analyse: POST CSV → expect PNG back ----
+analyseBtn.addEventListener('click', async () => {
+  try {
+    setStatus("");
+    if (points.length < 5) {
+      setStatus("Draw a spiral first.");
+      return;
+    }
+
+    const endpoint = getAnalyzeEndpoint();
+    if (!endpoint) {
+      setStatus("Paste backend base URL first (trycloudflare URL).");
+      return;
+    }
+
+    setBusy(true);
+    setStatus("Analysing...");
+
+    let csvContent = "timestamp_ms,x,y\n";
+    for (const point of points) csvContent += `${point.t},${point.x},${point.y}\n`;
+
+    const csvBlob = new Blob([csvContent], { type: "text/csv" });
+    const formData = new FormData();
+    formData.append("file", csvBlob, "drawing.csv");
+
+    const res = await fetch(endpoint, { method: "POST", body: formData });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`Backend error (${res.status}): ${txt || res.statusText}`);
+    }
+
+    const imgBlob = await res.blob();
+    showResultFromBlob(imgBlob);
+    setStatus("Done.");
+  } catch (err) {
+    console.error(err);
+    setStatus(err?.message || "Analyse failed.");
+  } finally {
+    setBusy(false);
+  }
+});
+
+// ---- Return ----
+returnBtn.addEventListener('click', () => {
+  setStatus("");
+  resetForRedraw();
+});
+</script>
+</body>
+</html>
