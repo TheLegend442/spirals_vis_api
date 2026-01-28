@@ -11,4 +11,3 @@ Then copy the CloudFare link and paste it to the webpage.
 
 ### Note:
 The code in this repository is an assembly of scripts that were used to research and write my diploma thesis.<br>
-All provided code is intellectual property of it's author and should not be directly used elsewhere.
